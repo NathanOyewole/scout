@@ -32,6 +32,7 @@ enum Cmd {
     Open { id: i64 },
     Source { id: i64 },
     Test { id: i64 },
+    Rate { id: i64, level: String },
     Report { id: i64 },
     State { id: i64, state: String },
 }
@@ -51,6 +52,7 @@ fn main() -> Result<()> {
         Cmd::Open { id } => cmd_open(id),
         Cmd::Source { id } => cmd_source(id),
         Cmd::Test { id } => cmd_test(id),
+        Cmd::Rate { id, level } => cmd_rate(id, level),
         Cmd::Report { id } => cmd_report(id),
         Cmd::State { id, state } => cmd_state(id, state),
     }
@@ -59,7 +61,7 @@ fn main() -> Result<()> {
 fn cmd_init() -> Result<()> {
     fs::create_dir_all(hunts_dir())?;
     let _ = db::open(&db_path())?;
-    println!("scout ready\n  {}\nnext: scout pull --source sourcify --chain base", db_path().display());
+    println!("scout ready\n  {}", db_path().display());
     Ok(())
 }
 
@@ -96,7 +98,7 @@ fn cmd_pull(query: Option<String>, limit: usize, source_kind: String, demo: bool
         }
         _ => if let Some(q) = query { ingest::search(&q, limit)? } else { ingest::latest_profiles(limit)? },
     };
-    if found.is_empty() { println!("empty. try: scout pull --source sourcify --chain base"); return Ok(()); }
+    if found.is_empty() { println!("empty"); return Ok(()); }
     for f in &found {
         let src = tag_source(&kind, &program, &f.source);
         let mut sigs = f.signals.clone();
@@ -106,14 +108,14 @@ fn cmd_pull(query: Option<String>, limit: usize, source_kind: String, demo: bool
         println!("#{id} {} {} {}", f.chain, f.name, f.address);
     }
     let n = db::export_csv(&conn, &csv_path())?;
-    println!("{n} CAs -> {}\nnext: scout source <id>", csv_path().display());
+    println!("{n} CAs -> {}", csv_path().display());
     Ok(())
 }
 
 fn cmd_list(kind: String) -> Result<()> {
     let filter = match kind.as_str() { "bounty" | "indie" => Some(kind.as_str()), _ => None };
     let rows = db::list_kind(&db::open(&db_path())?, filter)?;
-    if rows.is_empty() { println!("empty. run: scout pull --source sourcify --chain base"); return Ok(()); }
+    if rows.is_empty() { println!("empty"); return Ok(()); }
     println!("{:>4} {:<10} {:<14} {:<8} {:>5} {:<16} {}", "id", "chain", "source", "state", "score", "name", "address");
     for t in rows {
         println!("{:>4} {:<10} {:<14} {:<8} {:>5} {:<16} {}", t.id, t.chain, trunc(&t.source, 14), t.state, t.score, trunc(&t.name, 16), t.address);
@@ -149,8 +151,13 @@ fn cmd_source(id: i64) -> Result<()> {
     let dir = hunt_dir(&t);
     if !dir.join("NOTES.md").exists() { cmd_open(id)?; }
     println!("fetch {} / {}", t.chain, t.address);
-    source::fetch_into(&dir, &t.chain, &t.address)?;
-    db::set_state(&conn, id, "scoped")?;
+    let fetched = source::fetch_into(&dir, &t.chain, &t.address)?;
+    if fetched.heat == "skip" {
+        db::set_state(&conn, id, "killed")?;
+        println!("state -> killed (heat=skip)");
+    } else {
+        db::set_state(&conn, id, "scoped")?;
+    }
     Ok(())
 }
 
@@ -161,6 +168,20 @@ fn cmd_test(id: i64) -> Result<()> {
     if !dir.join("poc/test/Hypothesis.t.sol").exists() { cmd_open(id)?; }
     poc::print_test_cmds(&dir, &t)?;
     db::set_state(&conn, id, "hypothesized")?;
+    Ok(())
+}
+
+fn cmd_rate(id: i64, level: String) -> Result<()> {
+    let allowed = ["info", "low", "medium", "high", "critical"];
+    let level = level.to_ascii_lowercase();
+    if !allowed.contains(&level.as_str()) { anyhow::bail!("rate = info|low|medium|high|critical"); }
+    let conn = db::open(&db_path())?;
+    let t = db::get(&conn, id)?;
+    let dir = hunt_dir(&t);
+    fs::create_dir_all(&dir)?;
+    source::write_rate(&dir, &level, "")?;
+    println!("#{id} severity {level}");
+    println!("finding grade, not CA grade");
     Ok(())
 }
 
