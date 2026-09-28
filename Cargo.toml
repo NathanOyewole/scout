@@ -1,8 +1,8 @@
 [package]
 name = "scout"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2021"
-description = "Find CAs, pull verified source, hunt offline"
+description = "Find CAs, pull source, hunt offline. Bounty + indie queue."
 license = "MIT"
 
 [dependencies]
