@@ -1,23 +1,20 @@
-# scout v0.4
+# scout v0.5
 
-One queue for listed bounties and independent hunts.
+Heat on the radar. Severity on the report.
 
-```bash
+```powershell
 git pull
 cargo install --path .
-scout init
+scout --version
 
-# indie / fresh verified
 scout pull --source sourcify --chain base --kind indie
-scout list --kind indie
-scout source 1
-scout test 1
+scout source 4
+# prints kind / heat / skip reason
+# heat=skip auto-marks killed
 
-# listed program CA you copied from Immunefi/Cantina
-scout pull --address 0x... --chain eth --kind bounty --program immunefi --name ProtocolX
-scout list --kind bounty
+scout rate 4 high
 ```
 
-`scout test` prints a Foundry fork command. Never `--broadcast`.
+SURFACE.md now has contract name, kind (proxy|impl|token|vault), heat (skip|maybe|hunt), abi names, file list.
 
-See LEARN.md and ROADMAP.md.
+`scout rate <id> info|low|medium|high|critical` writes SEVERITY.md. You grade the hypothesis, not the CA.
