@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use std::fs;
 use std::path::Path;
 
@@ -14,6 +14,7 @@ pub fn fetch_into(dir: &Path, chain: &str, address: &str) -> Result<ingest::Fetc
             fs::create_dir_all(p)?;
         }
         fs::write(&path, body)?;
+        println!("  wrote {}", path.display());
     }
     let mut meta = format!(
         "compiler: {}\ndeployer: {}\nvalue_fns:\n",
@@ -23,5 +24,9 @@ pub fn fetch_into(dir: &Path, chain: &str, address: &str) -> Result<ingest::Fetc
         meta.push_str(&format!("- {f}\n"));
     }
     fs::write(dir.join("SURFACE.md"), meta)?;
+    println!("surface -> {}", dir.join("SURFACE.md").display());
+    if !fetched.value_fns.is_empty() {
+        println!("value fns: {}", fetched.value_fns.join(", "));
+    }
     Ok(fetched)
 }
