@@ -5,14 +5,12 @@ use std::path::{Path, PathBuf};
 
 mod db;
 mod ingest;
+mod poc;
 mod source;
 
 #[derive(Parser)]
 #[command(name = "scout", about = "Find CAs. Pull source. Hunt offline.", version)]
-struct Cli {
-    #[command(subcommand)]
-    cmd: Cmd,
-}
+struct Cli { #[command(subcommand)] cmd: Cmd }
 
 #[derive(Subcommand)]
 enum Cmd {
@@ -26,11 +24,14 @@ enum Cmd {
         #[arg(long, default_value = "base")] chain: String,
         #[arg(long, default_value = "unnamed")] name: String,
         #[arg(long, default_value = "")] deployer: String,
+        #[arg(long, default_value = "indie")] kind: String,
+        #[arg(long, default_value = "")] program: String,
     },
-    List,
+    List { #[arg(long, default_value = "all")] kind: String },
     Export,
     Open { id: i64 },
     Source { id: i64 },
+    Test { id: i64 },
     Report { id: i64 },
     State { id: i64, state: String },
 }
@@ -43,11 +44,13 @@ fn csv_path() -> PathBuf { root().join("cas.csv") }
 fn main() -> Result<()> {
     match Cli::parse().cmd {
         Cmd::Init => cmd_init(),
-        Cmd::Pull { query, limit, source, demo, address, chain, name, deployer } => cmd_pull(query, limit, source, demo, address, chain, name, deployer),
-        Cmd::List => cmd_list(),
+        Cmd::Pull { query, limit, source, demo, address, chain, name, deployer, kind, program } =>
+            cmd_pull(query, limit, source, demo, address, chain, name, deployer, kind, program),
+        Cmd::List { kind } => cmd_list(kind),
         Cmd::Export => cmd_export(),
         Cmd::Open { id } => cmd_open(id),
         Cmd::Source { id } => cmd_source(id),
+        Cmd::Test { id } => cmd_test(id),
         Cmd::Report { id } => cmd_report(id),
         Cmd::State { id, state } => cmd_state(id, state),
     }
@@ -60,12 +63,21 @@ fn cmd_init() -> Result<()> {
     Ok(())
 }
 
-fn cmd_pull(query: Option<String>, limit: usize, source_kind: String, demo: bool, address: Option<String>, chain: String, name: String, deployer: String) -> Result<()> {
+fn tag_source(kind: &str, program: &str, raw: &str) -> String {
+    if kind.eq_ignore_ascii_case("bounty") {
+        if program.is_empty() { "bounty".into() } else { format!("bounty:{program}") }
+    } else { raw.to_string() }
+}
+
+fn cmd_pull(query: Option<String>, limit: usize, source_kind: String, demo: bool, address: Option<String>, chain: String, name: String, deployer: String, kind: String, program: String) -> Result<()> {
     fs::create_dir_all(hunts_dir())?;
     let conn = db::open(&db_path())?;
     if let Some(addr) = address {
-        let id = db::upsert(&conn, &chain, &addr, &name, &deployer, "", "", "manual", 4, &["manual".into()])?;
-        println!("#{id} {chain} {addr}");
+        let src = tag_source(&kind, &program, "manual");
+        let mut sigs = vec![kind.clone()];
+        if !program.is_empty() { sigs.push(program.clone()); }
+        let id = db::upsert(&conn, &chain, &addr, &name, &deployer, "", "", &src, 4, &sigs)?;
+        println!("#{id} {src} {chain} {addr}");
         db::export_csv(&conn, &csv_path())?;
         return Ok(());
     }
@@ -82,11 +94,15 @@ fn cmd_pull(query: Option<String>, limit: usize, source_kind: String, demo: bool
             out.extend(ingest::sourcify_latest(ingest::chain_id_of(&chain), limit)?);
             out
         }
-        _ => { if let Some(q) = query { ingest::search(&q, limit)? } else { ingest::latest_profiles(limit)? } }
+        _ => if let Some(q) = query { ingest::search(&q, limit)? } else { ingest::latest_profiles(limit)? },
     };
     if found.is_empty() { println!("empty. try: scout pull --source sourcify --chain base"); return Ok(()); }
     for f in &found {
-        let id = db::upsert(&conn, &f.chain, &f.address, &f.name, "", &f.pair, &f.url, &f.source, f.score, &f.signals)?;
+        let src = tag_source(&kind, &program, &f.source);
+        let mut sigs = f.signals.clone();
+        sigs.push(kind.clone());
+        if !program.is_empty() { sigs.push(program.clone()); }
+        let id = db::upsert(&conn, &f.chain, &f.address, &f.name, "", &f.pair, &f.url, &src, f.score, &sigs)?;
         println!("#{id} {} {} {}", f.chain, f.name, f.address);
     }
     let n = db::export_csv(&conn, &csv_path())?;
@@ -94,12 +110,13 @@ fn cmd_pull(query: Option<String>, limit: usize, source_kind: String, demo: bool
     Ok(())
 }
 
-fn cmd_list() -> Result<()> {
-    let rows = db::list(&db::open(&db_path())?)?;
+fn cmd_list(kind: String) -> Result<()> {
+    let filter = match kind.as_str() { "bounty" | "indie" => Some(kind.as_str()), _ => None };
+    let rows = db::list_kind(&db::open(&db_path())?, filter)?;
     if rows.is_empty() { println!("empty. run: scout pull --source sourcify --chain base"); return Ok(()); }
-    println!("{:>4} {:<10} {:<8} {:>5} {:<18} {}", "id", "chain", "state", "score", "name", "address");
+    println!("{:>4} {:<10} {:<14} {:<8} {:>5} {:<16} {}", "id", "chain", "source", "state", "score", "name", "address");
     for t in rows {
-        println!("{:>4} {:<10} {:<8} {:>5} {:<18} {}", t.id, t.chain, t.state, t.score, trunc(&t.name, 18), t.address);
+        println!("{:>4} {:<10} {:<14} {:<8} {:>5} {:<16} {}", t.id, t.chain, trunc(&t.source, 14), t.state, t.score, trunc(&t.name, 16), t.address);
     }
     Ok(())
 }
@@ -120,7 +137,7 @@ fn cmd_open(id: i64) -> Result<()> {
     write_if_missing(&dir.join("NOTES.md"), &notes_md(&t))?;
     write_if_missing(&dir.join("REPORT.md"), &report_md(&t))?;
     write_if_missing(&dir.join("poc/foundry.toml"), "[profile.default]\nsrc = \"src\"\nout = \"out\"\nlibs = [\"lib\"]\n")?;
-    write_if_missing(&dir.join("poc/test/Hypothesis.t.sol"), POC_SOL)?;
+    write_if_missing(&dir.join("poc/test/Hypothesis.t.sol"), &poc::fork_test_sol(&t))?;
     db::set_state(&conn, id, "scoped")?;
     println!("{}", dir.display());
     Ok(())
@@ -134,6 +151,16 @@ fn cmd_source(id: i64) -> Result<()> {
     println!("fetch {} / {}", t.chain, t.address);
     source::fetch_into(&dir, &t.chain, &t.address)?;
     db::set_state(&conn, id, "scoped")?;
+    Ok(())
+}
+
+fn cmd_test(id: i64) -> Result<()> {
+    let conn = db::open(&db_path())?;
+    let t = db::get(&conn, id)?;
+    let dir = hunt_dir(&t);
+    if !dir.join("poc/test/Hypothesis.t.sol").exists() { cmd_open(id)?; }
+    poc::print_test_cmds(&dir, &t)?;
+    db::set_state(&conn, id, "hypothesized")?;
     Ok(())
 }
 
@@ -169,6 +196,5 @@ fn notes_md(t: &db::Target) -> String {
     format!("# {name}\n\n- id: {id}\n- chain: {chain}\n- CA: `{addr}`\n- url: {url}\n- source: {source}\n- score: {score}\n- signals: {signals}\n\n## Duke questions\n1. Who is allowed to move the money?\n2. What happens at the handoff between contracts?\n3. Can a stranger trigger something only the team should?\n\n## Hypotheses\n- [ ] H1:\n- [ ] H2:\n- [ ] H3:\n", name=t.name, id=t.id, chain=t.chain, addr=t.address, url=t.url, source=t.source, score=t.score, signals=t.signals)
 }
 fn report_md(t: &db::Target) -> String {
-    format!("# {name} draft\n\nDo not post while open.\n- chain: {chain}\n- address: `{addr}`\n- url: {url}\n- severity:\n- impact:\n", name=t.name, chain=t.chain, addr=t.address, url=t.url)
+    format!("# {name} draft\n\nDo not post while open.\n- chain: {chain}\n- address: `{addr}`\n- url: {url}\n- source: {source}\n- severity:\n- impact:\n", name=t.name, chain=t.chain, addr=t.address, url=t.url, source=t.source)
 }
-const POC_SOL: &str = "// SPDX-License-Identifier: MIT\npragma solidity ^0.8.24;\nimport {Test} from \"forge-std/Test.sol\";\ncontract HypothesisTest is Test { function testHypothesis() public {} }\n";
