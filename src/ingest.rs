@@ -173,13 +173,94 @@ fn is_evm(chain: &str) -> bool {
     )
 }
 
+pub fn sourcify_latest(chain_id: u64, limit: usize) -> Result<Vec<Found>> {
+    let url = format!(
+        "https://sourcify.dev/server/v2/contracts/{chain_id}?limit={limit}&sort=desc"
+    );
+    let raw: SourcifyList = ureq::get(&url)
+        .call()
+        .context("sourcify contracts list")?
+        .into_json()
+        .context("parse sourcify list")?;
+
+    let chain = chain_name(chain_id);
+    let mut out = Vec::new();
+    for c in raw.results {
+        if c.address.is_empty() {
+            continue;
+        }
+        let mut signals = vec!["sourcify".into(), "verified".into()];
+        if c.match_kind.contains("exact") {
+            signals.push("exact-match".into());
+        }
+        let score = 5 + signals.len() as i64;
+        let page = format!("https://repo.sourcify.dev/{chain_id}/{}", c.address);
+        out.push(Found {
+            chain: chain.clone(),
+            address: c.address,
+            name: format!(
+                "verified-{}",
+                c.match_id
+                    .map(|v| v.to_string().trim_matches('"').to_string())
+                    .unwrap_or_else(|| "new".into())
+            ),
+            pair: String::new(),
+            url: page,
+            source: "sourcify".into(),
+            signals,
+            score,
+        });
+    }
+    Ok(out)
+}
+
+pub fn chain_id_of(name: &str) -> u64 {
+    match name.to_ascii_lowercase().as_str() {
+        "eth" | "ethereum" | "mainnet" => 1,
+        "base" => 8453,
+        "arb" | "arbitrum" => 42161,
+        "op" | "optimism" => 10,
+        "bsc" | "bnb" => 56,
+        "polygon" | "matic" => 137,
+        "avax" | "avalanche" => 43114,
+        other => other.parse().unwrap_or(8453),
+    }
+}
+
+fn chain_name(id: u64) -> String {
+    match id {
+        1 => "ethereum".into(),
+        8453 => "base".into(),
+        42161 => "arbitrum".into(),
+        10 => "optimism".into(),
+        56 => "bsc".into(),
+        137 => "polygon".into(),
+        43114 => "avalanche".into(),
+        n => n.to_string(),
+    }
+}
+
+#[derive(Deserialize)]
+struct SourcifyList {
+    #[serde(default)]
+    results: Vec<SourcifyContract>,
+}
+
+#[derive(Deserialize)]
+struct SourcifyContract {
+    #[serde(default)]
+    address: String,
+    #[serde(default, rename = "match")]
+    match_kind: String,
+    #[serde(default, rename = "matchId")]
+    match_id: Option<serde_json::Value>,
+}
+
 fn urlencoding_lite(s: &str) -> String {
     let mut out = String::new();
     for b in s.bytes() {
         match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                out.push(b as char)
-            }
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => out.push(b as char),
             b' ' => out.push('+'),
             _ => out.push_str(&format!("%{b:02X}")),
         }
