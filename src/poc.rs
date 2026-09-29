@@ -33,11 +33,47 @@ pub fn is_hex_address(addr: &str) -> bool {
     a.len() == 42 && a.starts_with("0x") && a[2..].chars().all(|c| c.is_ascii_hexdigit())
 }
 
+/// EIP-55 checksum casing for a solidity address literal.
+///
+/// solc rejects a bare 40-hex-digit literal whose casing is not the checksum
+/// form: "This looks like an address but has an invalid checksum." Addresses
+/// are stored lowercase in the db, so every generated scaffold failed to
+/// compile. Casting through `address(uint160(...))` does NOT help - solc
+/// applies the same rule to the literal inside the cast.
+pub fn checksum(addr: &str) -> String {
+    use tiny_keccak::{Hasher, Keccak};
+    let a = addr.trim().trim_start_matches("0x").to_ascii_lowercase();
+    if a.len() != 40 {
+        return format!("0x{a}");
+    }
+    let mut k = Keccak::v256();
+    k.update(a.as_bytes());
+    let mut out = [0u8; 32];
+    k.finalize(&mut out);
+    let mut s = String::from("0x");
+    for (i, c) in a.chars().enumerate() {
+        let nibble = if i % 2 == 0 {
+            out[i / 2] >> 4
+        } else {
+            out[i / 2] & 0x0f
+        };
+        s.push(if nibble >= 8 {
+            c.to_ascii_uppercase()
+        } else {
+            c
+        });
+    }
+    s
+}
+
 pub fn fork_test_sol(t: &Target) -> String {
     let addr = t.address.trim().to_string();
     let rpc = rpc_for(&t.chain).unwrap_or_else(|| "<rpc for this chain>".to_string());
     let (line, usable) = if is_hex_address(&addr) {
-        (format!("    address constant TARGET = {addr};"), true)
+        (
+            format!("    address constant TARGET = {};", checksum(&addr)),
+            true,
+        )
     } else {
         (
             format!(
@@ -50,11 +86,11 @@ pub fn fork_test_sol(t: &Target) -> String {
     };
     let guard = if usable {
         r#"    function testTargetHasCode() public view {
-        assertTrue(TARGET.code.length > 0, "no code at CA — wrong chain?");
+        assertTrue(TARGET.code.length > 0, "no code at CA - wrong chain?");
     }"#
     } else {
         r#"    function testTargetHasCode() public view {
-        fail("CA is not a hex address — fix it with `scout state` or re-pull before testing");
+        fail("CA is not a hex address - fix it with `scout state` or re-pull before testing");
     }"#
     };
     format!(
@@ -161,7 +197,7 @@ pub fn prove(dir: &Path, t: &Target) -> Result<i32> {
     print_test_cmds(dir, t)?;
     let Some(rpc) = rpc_for(&t.chain) else {
         anyhow::bail!(
-            "no rpc for chain '{}' — set SCOUT_RPC to a fork url",
+            "no rpc for chain '{}' - set SCOUT_RPC to a fork url",
             t.chain
         );
     };
@@ -175,7 +211,7 @@ pub fn prove(dir: &Path, t: &Target) -> Result<i32> {
         return Ok(127);
     };
     if !poc.join("foundry.toml").exists() {
-        anyhow::bail!("no poc/foundry.toml — run: scout open {}", t.id);
+        anyhow::bail!("no poc/foundry.toml - run: scout open {}", t.id);
     }
     if !poc.join("lib/forge-std").exists() {
         println!("installing forge-std...");
@@ -187,16 +223,51 @@ pub fn prove(dir: &Path, t: &Target) -> Result<i32> {
             .status()
             .context("forge install")?;
         if !st.success() {
-            println!("forge install failed — run it by hand in {}", poc.display());
+            println!("forge install failed - run it by hand in {}", poc.display());
         }
     }
+    refuse_live_key()?;
     println!("running fork test (no broadcast)...");
     let st = Command::new(&forge)
         .current_dir(&poc)
-        .args(["test", "--fork-url", &rpc, "-vv"])
+        .args(fork_test_args(&rpc))
         .status()
         .context("forge test")?;
     Ok(st.code().unwrap_or(1))
+}
+
+/// The exact argv used for a fork test. Single source of truth, and pinned by
+/// a test: this command must never be able to sign or send a transaction.
+fn fork_test_args(rpc: &str) -> Vec<String> {
+    vec!["test".into(), "--fork-url".into(), rpc.into(), "-vv".into()]
+}
+
+/// Env vars that would let a signing key reach the child process. `forge test`
+/// does not broadcast, but a stray key in the environment is exactly the thing
+/// that turns a typo elsewhere into a real transaction against someone else's
+/// contract. Refuse rather than warn.
+const LIVE_KEY_VARS: [&str; 6] = [
+    "ETH_PRIVATE_KEY",
+    "PRIVATE_KEY",
+    "DEPLOYER_PRIVATE_KEY",
+    "SOLANA_PRIVATE_KEY",
+    "FOUNDRY_PRIVATE_KEY",
+    "MNEMONIC",
+];
+
+fn refuse_live_key() -> Result<()> {
+    for v in LIVE_KEY_VARS {
+        if let Ok(val) = std::env::var(v) {
+            if !val.trim().is_empty() {
+                anyhow::bail!(
+                    "{v} is set. scout only runs local fork tests and will not \
+                     work with a signing key in the environment. unset it first: \
+                     Remove-Item Env:{v}"
+                );
+            }
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -271,6 +342,84 @@ mod tests {
         .unwrap();
         assert!(hypothesis_is_placeholder(&d));
         let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn fork_test_can_never_broadcast() {
+        // The user does not test against live contracts. This argv is the only
+        // thing scout ever hands forge, so pin it: `forge test` against a
+        // --fork-url is local, and there is no --broadcast anywhere.
+        let a = fork_test_args("https://mainnet.base.org");
+        assert_eq!(a[0], "test", "never `script` or `create`");
+        assert!(!a.iter().any(|x| x == "--broadcast"));
+        assert!(!a.iter().any(|x| x == "--private-key" || x == "--legacy"));
+        assert!(a.contains(&"--fork-url".to_string()), "always a fork url");
+    }
+
+    /// The environment is process-global, so the two tests that mutate it must
+    /// not overlap.
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    #[test]
+    fn a_signing_key_in_the_environment_is_refused() {
+        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        for v in LIVE_KEY_VARS {
+            let prev = std::env::var(v).ok();
+            unsafe { std::env::set_var(v, "0xdeadbeef") };
+            let err = refuse_live_key();
+            match prev {
+                Some(p) => unsafe { std::env::set_var(v, p) },
+                None => unsafe { std::env::remove_var(v) },
+            }
+            let e = err.expect_err(&format!("{v} must be refused"));
+            assert!(e.to_string().contains(v), "error must name the var");
+        }
+    }
+
+    #[test]
+    fn an_empty_key_var_is_not_a_refusal() {
+        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        unsafe { std::env::set_var("ETH_PRIVATE_KEY", "   ") };
+        let r = refuse_live_key();
+        unsafe { std::env::remove_var("ETH_PRIVATE_KEY") };
+        assert!(r.is_ok(), "whitespace is not a key");
+    }
+
+    #[test]
+    fn checksum_matches_the_eip55_vectors() {
+        // Vectors from EIP-55 itself. solc refuses a mis-cased literal with
+        // "This looks like an address but has an invalid checksum", which is
+        // why the scaffold has to emit the checksummed form.
+        for v in [
+            "0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed",
+            "0xfB6916095ca1df60bB79Ce92cE3Ea74c37c5d359",
+            "0xdbF03B407c01E7cD3CBea99509d93f8DDDC8C6FB",
+            "0xD1220A0cf47c7B9Be7A2E6BA89F429762e7b9aDb",
+        ] {
+            assert_eq!(checksum(&v.to_ascii_lowercase()), v, "lowercase in -> {v}");
+            assert_eq!(checksum(v), v, "already checksummed is unchanged");
+        }
+    }
+
+    #[test]
+    fn checksum_uses_the_live_hunt_address() {
+        // The address that actually broke the scaffold.
+        assert_eq!(
+            checksum("0x613db9c924adb7a7a90c11b02cce20c913e3fe50"),
+            "0x613Db9c924ADB7A7A90c11b02Cce20c913E3Fe50"
+        );
+    }
+
+    #[test]
+    fn scaffold_emits_a_checksummed_target() {
+        let s = fork_test_sol(&target(
+            "base",
+            "0x613db9c924adb7a7a90c11b02cce20c913e3fe50",
+        ));
+        assert!(
+            s.contains("address constant TARGET = 0x613Db9c924ADB7A7A90c11b02Cce20c913E3Fe50;"),
+            "scaffold must be checksummed or solc rejects it:\n{s}"
+        );
     }
 
     #[test]

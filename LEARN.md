@@ -12,9 +12,23 @@ Scout finds CAs. You find bugs.
 6. `scout test <id>`, fill `testHypothesis` from NOTES.md, then `scout prove <id>`
 
 `scout prove` will not mark anything proven while the test is still the empty
-scaffold. That is the whole point — do not work around it.
+scaffold. That is the whole point - do not work around it.
 
 If you cannot explain one function, do not hunt a second CA.
+
+## the fork is local, and that is enforced
+
+Every test runs against a local fork of a public rpc. Nothing is sent to a
+live chain, and nothing in this tool can send anything:
+
+- the one command scout runs is `forge test --fork-url <url> -vv`
+- there is no `--broadcast` and no private-key flag in the crate
+- if a signing key is sitting in your environment, `prove` refuses to start
+  (`Remove-Item Env:ETH_PRIVATE_KEY`)
+
+Do not test against a live contract to "check" a hypothesis. A fork replays
+real state and is enough for every question that matters here. A live call
+risks someone else's funds for information a fork already gave you.
 
 ## study
 
@@ -47,5 +61,8 @@ Listed program first if you need cash. Indie after.
   prove` checks for the stub first and refuses to mark anything proven.
 - Prefer a stub that fails over a mock that passes. If a guard is not pinned
   by a test that fails before the fix, it is not a guard yet.
+- When the compiler rejects generated solidity, believe the compiler. It has
+  rejected three things here already: a missing data location, a mis-cased
+  address literal, and a non-ASCII character in a string.
 
 Fork only. Private report. No mainnet call. No public drop while open.

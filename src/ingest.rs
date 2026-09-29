@@ -372,17 +372,58 @@ fn split_surface(mutating: &[String]) -> (Vec<String>, Vec<String>) {
     (value, admin)
 }
 
-fn sol_types(list: Option<&serde_json::Value>, field: &str) -> Option<Vec<String>> {
+/// ABI types, as they may be spelled in a Solidity interface declaration.
+///
+/// Reference types need an explicit data location on `external` functions, and
+/// solc rejects `function f(bytes memory)` with "Data location must be
+/// "memory" or "calldata" ... but none was given". That is why the generated
+/// TargetCalls.sol has to decorate them. `memory` is used for both inputs and
+/// outputs: it is the only location valid on both sides, and it is what
+/// forge-std's low-level calls and `abi.encodeCall` accept.
+fn sol_decl_types(list: Option<&serde_json::Value>) -> Option<Vec<String>> {
     let arr = list?.as_array()?;
     let mut out = Vec::new();
     for i in arr {
-        let t = i.get(field)?.as_str()?.to_string();
+        let t = i.get("type")?.as_str()?;
         // Tuples and arrays of tuples have no flat form here; skip the function
         // rather than emit solidity that will not compile.
         if t.starts_with("tuple") || t.contains('(') {
             return None;
         }
-        out.push(t);
+        out.push(with_data_location(t, "memory"));
+    }
+    Some(out)
+}
+
+/// solc's own test for "needs a data location": a value type is anything that
+/// is not a dynamically-sized reference. Arrays of value types are reference
+/// types too and need `memory` as well.
+fn needs_data_location(t: &str) -> bool {
+    let base = t.split('[').next().unwrap_or(t);
+    matches!(base, "string" | "bytes" | "T" | "tuple") || base.ends_with(']') || t.contains('[')
+}
+
+fn with_data_location(t: &str, loc: &str) -> String {
+    if needs_data_location(t) {
+        format!("{t} {loc}")
+    } else {
+        t.to_string()
+    }
+}
+
+/// Canonical signature form (`withdraw(uint256)`) for the ABI encoder. This
+/// must NOT include data locations — `abi.encodeCall` and the selector depend
+/// on the bare type, and `f(bytes memory)` hashes differently from
+/// `f(bytes)`.
+fn sol_sig_types(list: Option<&serde_json::Value>) -> Option<Vec<String>> {
+    let arr = list?.as_array()?;
+    let mut out = Vec::new();
+    for i in arr {
+        let t = i.get("type")?.as_str()?;
+        if t.starts_with("tuple") || t.contains('(') {
+            return None;
+        }
+        out.push(t.to_string());
     }
     Some(out)
 }
@@ -404,12 +445,17 @@ fn abi_decls(abi: Option<&serde_json::Value>, mutating: &[String]) -> Vec<FnDecl
         if !mutating.iter().any(|m| m == name) {
             continue;
         }
-        let Some(args) = sol_types(item.get("inputs"), "type") else {
+        // Decl uses data locations; the signature must not (it feeds the
+        // selector, and `f(bytes memory)` hashes differently from `f(bytes)`).
+        let Some(decl_args) = sol_decl_types(item.get("inputs")) else {
             continue;
         };
-        let outs = sol_types(item.get("outputs"), "type");
-        let sig = format!("{name}({})", args.join(","));
-        let mut decl = format!("function {name}({}) external", args.join(","));
+        let Some(sig_args) = sol_sig_types(item.get("inputs")) else {
+            continue;
+        };
+        let outs = sol_decl_types(item.get("outputs"));
+        let sig = format!("{name}({})", sig_args.join(","));
+        let mut decl = format!("function {name}({}) external", decl_args.join(","));
         if item.get("stateMutability").and_then(|m| m.as_str()) == Some("payable") {
             decl.push_str(" payable");
         }
@@ -898,6 +944,52 @@ mod tests {
             "function withdraw(uint256) external returns (uint256);"
         );
         assert_eq!(d[0].decl, "function pay() external payable;");
+    }
+
+    #[test]
+    fn reference_types_get_a_data_location_in_declarations() {
+        // solc rejects "function execute(address,uint256,bytes) external" with
+        // "Data location must be memory or calldata ... none was given", which
+        // is why the generated interface failed to compile.
+        let a = abi(r#"[
+            {"type":"function","name":"execute","stateMutability":"nonpayable",
+             "inputs":[{"type":"address"},{"type":"uint256"},{"type":"bytes"}],
+             "outputs":[{"type":"bytes"}]}
+        ]"#);
+        let mutating = abi_fn_names(Some(&a), Some(false));
+        let d = abi_decls(Some(&a), &mutating);
+        assert_eq!(
+            d[0].decl,
+            "function execute(address,uint256,bytes memory) external returns (bytes memory);"
+        );
+    }
+
+    #[test]
+    fn signatures_never_carry_a_data_location() {
+        // The signature feeds the selector. f(bytes memory) hashes differently
+        // from f(bytes), so the sig must use the bare ABI type.
+        let a = abi(r#"[
+            {"type":"function","name":"submit","stateMutability":"nonpayable",
+             "inputs":[{"type":"bytes"},{"type":"string"}],"outputs":[]}
+        ]"#);
+        let mutating = abi_fn_names(Some(&a), Some(false));
+        let d = abi_decls(Some(&a), &mutating);
+        assert_eq!(d[0].sig, "submit(bytes,string)");
+        assert!(d[0].decl.contains("bytes memory"), "decl is decorated");
+    }
+
+    #[test]
+    fn arrays_of_value_types_also_need_memory() {
+        let a = abi(r#"[
+            {"type":"function","name":"batch","stateMutability":"nonpayable",
+             "inputs":[{"type":"address[]"},{"type":"uint256[]"}],"outputs":[]}
+        ]"#);
+        let mutating = abi_fn_names(Some(&a), Some(false));
+        let d = abi_decls(Some(&a), &mutating);
+        assert_eq!(
+            d[0].decl,
+            "function batch(address[] memory,uint256[] memory) external;"
+        );
     }
 
     #[test]

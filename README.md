@@ -34,6 +34,23 @@ scout rm 4         # drop a false positive (refuses if it is graded)
   folder is named after it.
 - `scout prove` exits `127` when forge is not installed, so a script can tell
   "tool missing" apart from "the test failed".
+- `scout prove` refuses to run at all if a signing key is in the environment
+  (`ETH_PRIVATE_KEY`, `PRIVATE_KEY`, `SOLANA_PRIVATE_KEY`, `MNEMONIC`, ...).
+  There is no `--broadcast` anywhere in this crate and none may be added.
+
+## fork only, never live
+
+This tool does not test against live contracts, by design, not by
+configuration:
+
+- the only forge argv scout ever runs is
+  `forge test --fork-url <url> -vv`, pinned by a test
+- there is no `--broadcast`, no `--private-key`, no `forge script`, no
+  `vm.startBroadcast`
+- a private key in the environment is a hard error, not a warning
+
+If you ever need a broadcast-capable tool, that is a different tool with
+different rules. Do not bolt it onto this one.
 
 ## reading SURFACE.md
 
@@ -53,10 +70,20 @@ the severity line in REPORT.md. You grade the hypothesis, not the CA.
 ## environment
 
 - `SCOUT_RPC` — override the fork url. Public endpoints rate limit.
+- `ETH_PRIVATE_KEY` / `PRIVATE_KEY` / `SOLANA_PRIVATE_KEY` / `MNEMONIC` /
+  `DEPLOYER_PRIVATE_KEY` / `FOUNDRY_PRIVATE_KEY` — `prove` refuses to run
+  while any of these is set. Unset with `Remove-Item Env:NAME`.
 
 ## foundry
 
-`scout prove` needs `forge`. `foundryup` does not run in PowerShell, so grab
-the win32 zip from https://github.com/foundry-rs/foundry/releases, extract
-`forge.exe`, and put that folder on Path. Without it `prove` prints exactly
-that and exits 127.
+`scout prove` needs `forge`. Installed on this machine at
+`C:\Users\Olufemi\.foundry\bin\forge.exe` (1.8.3), which is already on Path.
+
+If you need to reinstall it, `foundryup` does not run in PowerShell, so grab
+`foundry_v1.8.3_win32_amd64.zip` from
+https://github.com/foundry-rs/foundry/releases, verify it against the
+`.sha256` next to it, extract `forge.exe` into `~/.foundry/bin`, and put that
+folder on Path. Without forge, `prove` says so and exits 127.
+
+State lives in `~/.scout`, not in the repo: `scout.db`, `cas.csv`, and
+`hunts/<id>-<name>/`.
