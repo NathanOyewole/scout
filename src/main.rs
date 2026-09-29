@@ -9,7 +9,7 @@ mod poc;
 mod source;
 
 #[derive(Parser)]
-#[command(name = "scout", about = "Find CAs. Pull source. Hunt offline.", version)]
+#[command(name = "scout", about = "Find CAs. Pull source. Prove on a fork.", version)]
 struct Cli { #[command(subcommand)] cmd: Cmd }
 
 #[derive(Subcommand)]
@@ -32,6 +32,7 @@ enum Cmd {
     Open { id: i64 },
     Source { id: i64 },
     Test { id: i64 },
+    Prove { id: i64 },
     Rate { id: i64, level: String },
     Report { id: i64 },
     State { id: i64, state: String },
@@ -52,6 +53,7 @@ fn main() -> Result<()> {
         Cmd::Open { id } => cmd_open(id),
         Cmd::Source { id } => cmd_source(id),
         Cmd::Test { id } => cmd_test(id),
+        Cmd::Prove { id } => cmd_prove(id),
         Cmd::Rate { id, level } => cmd_rate(id, level),
         Cmd::Report { id } => cmd_report(id),
         Cmd::State { id, state } => cmd_state(id, state),
@@ -107,8 +109,7 @@ fn cmd_pull(query: Option<String>, limit: usize, source_kind: String, demo: bool
         let id = db::upsert(&conn, &f.chain, &f.address, &f.name, "", &f.pair, &f.url, &src, f.score, &sigs)?;
         println!("#{id} {} {} {}", f.chain, f.name, f.address);
     }
-    let n = db::export_csv(&conn, &csv_path())?;
-    println!("{n} CAs -> {}", csv_path().display());
+    db::export_csv(&conn, &csv_path())?;
     Ok(())
 }
 
@@ -171,6 +172,23 @@ fn cmd_test(id: i64) -> Result<()> {
     Ok(())
 }
 
+fn cmd_prove(id: i64) -> Result<()> {
+    let conn = db::open(&db_path())?;
+    let t = db::get(&conn, id)?;
+    let dir = hunt_dir(&t);
+    if !dir.join("poc/test/Hypothesis.t.sol").exists() { cmd_open(id)?; }
+    let code = poc::prove(&dir, &t)?;
+    if code == 0 {
+        db::set_state(&conn, id, "proven")?;
+        println!("state -> proven (empty testHypothesis still passes — fill it)");
+    } else if code == 127 {
+        println!("install forge, then scout prove {id} again");
+    } else {
+        println!("forge exited {code}");
+    }
+    Ok(())
+}
+
 fn cmd_rate(id: i64, level: String) -> Result<()> {
     let allowed = ["info", "low", "medium", "high", "critical"];
     let level = level.to_ascii_lowercase();
@@ -181,7 +199,6 @@ fn cmd_rate(id: i64, level: String) -> Result<()> {
     fs::create_dir_all(&dir)?;
     source::write_rate(&dir, &level, "")?;
     println!("#{id} severity {level}");
-    println!("finding grade, not CA grade");
     Ok(())
 }
 
@@ -217,5 +234,5 @@ fn notes_md(t: &db::Target) -> String {
     format!("# {name}\n\n- id: {id}\n- chain: {chain}\n- CA: `{addr}`\n- url: {url}\n- source: {source}\n- score: {score}\n- signals: {signals}\n\n## Duke questions\n1. Who is allowed to move the money?\n2. What happens at the handoff between contracts?\n3. Can a stranger trigger something only the team should?\n\n## Hypotheses\n- [ ] H1:\n- [ ] H2:\n- [ ] H3:\n", name=t.name, id=t.id, chain=t.chain, addr=t.address, url=t.url, source=t.source, score=t.score, signals=t.signals)
 }
 fn report_md(t: &db::Target) -> String {
-    format!("# {name} draft\n\nDo not post while open.\n- chain: {chain}\n- address: `{addr}`\n- url: {url}\n- source: {source}\n- severity:\n- impact:\n", name=t.name, chain=t.chain, addr=t.address, url=t.url, source=t.source)
+    format!("# {name} draft\n\nDo not post while open.\n- chain: {chain}\n- address: `{addr}`\n- url: {url}\n- source: {source}\n- severity:\n", name=t.name, chain=t.chain, addr=t.address, url=t.url, source=t.source)
 }
