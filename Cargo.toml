@@ -1,8 +1,8 @@
 [package]
 name = "scout"
-version = "0.5.0"
+version = "0.6.0"
 edition = "2021"
-description = "Find CAs, pull source, grade findings. Heat on radar, severity on report."
+description = "Radar to report. Prove = fork test only."
 license = "MIT"
 
 [dependencies]

@@ -1,5 +1,6 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use std::path::Path;
+use std::process::Command;
 
 use crate::db::Target;
 
@@ -25,15 +26,10 @@ import {{Test}} from "forge-std/Test.sol";
 // Local fork only. Do not broadcast.
 contract HypothesisTest is Test {{
     address constant TARGET = {addr};
-
-    function setUp() public {{
-        // forge test --fork-url $RPC
-    }}
-
+    function setUp() public {{}}
     function testReadTarget() public view {{
         assertTrue(TARGET.code.length > 0, "no code at CA");
     }}
-
     function testHypothesis() public {{
         // fill from NOTES.md
     }}
@@ -45,13 +41,48 @@ contract HypothesisTest is Test {{
 
 pub fn print_test_cmds(dir: &Path, t: &Target) -> Result<()> {
     let rpc = rpc_for(&t.chain);
-    println!("poc {}", dir.display());
+    let poc = dir.join("poc");
+    println!("poc {}", poc.display());
     println!("rpc {rpc}");
     println!();
-    println!("cd {}", dir.join("poc").display());
+    println!("cd {}", poc.display());
     println!("forge install foundry-rs/forge-std --no-commit");
     println!("forge test --fork-url {rpc} -vv");
     println!();
     println!("no --broadcast. fork only.");
     Ok(())
+}
+
+fn forge_bin() -> Option<String> {
+    for n in ["forge", "forge.exe"] {
+        if let Ok(out) = Command::new(n).arg("--version").output() {
+            if out.status.success() { return Some(n.to_string()); }
+        }
+    }
+    None
+}
+
+pub fn prove(dir: &Path, t: &Target) -> Result<i32> {
+    let poc = dir.join("poc");
+    let rpc = rpc_for(&t.chain);
+    print_test_cmds(dir, t)?;
+    let Some(forge) = forge_bin() else {
+        println!();
+        println!("forge not on PATH.");
+        println!("Windows: get the win zip from https://github.com/foundry-rs/foundry/releases");
+        println!("extract forge.exe and add that folder to Path.");
+        println!("Do not curl | bash in PowerShell.");
+        return Ok(127);
+    };
+    if !poc.join("foundry.toml").exists() {
+        anyhow::bail!("no poc/foundry.toml — run scout source first");
+    }
+    if !poc.join("lib/forge-std").exists() {
+        println!("installing forge-std...");
+        let st = Command::new(&forge).current_dir(&poc).args(["install", "foundry-rs/forge-std", "--no-commit"]).status().context("forge install")?;
+        if !st.success() { println!("forge install failed; run it in the poc folder"); }
+    }
+    println!("running fork test (no broadcast)...");
+    let st = Command::new(&forge).current_dir(&poc).args(["test", "--fork-url", rpc, "-vv"]).status().context("forge test")?;
+    Ok(st.code().unwrap_or(1))
 }
