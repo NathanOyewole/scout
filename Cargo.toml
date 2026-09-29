@@ -1,6 +1,6 @@
 [package]
 name = "scout"
-version = "0.6.0"
+version = "0.7.0"
 edition = "2021"
 description = "Radar to report. Prove = fork test only."
 license = "MIT"
