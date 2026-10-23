@@ -84,6 +84,7 @@ enum Cmd {
         #[arg(long)]
         force: bool,
     },
+    Dashboard,
 }
 
 fn root() -> PathBuf {
@@ -173,6 +174,7 @@ fn run() -> Result<()> {
         Cmd::Report { id } => cmd_report(id),
         Cmd::State { id, state } => cmd_state(id, state),
         Cmd::Rm { id, force } => cmd_rm(id, force),
+        Cmd::Dashboard => cmd_dashboard(),
     }
 }
 
@@ -570,6 +572,101 @@ fn cmd_state(id: i64, state: String) -> Result<()> {
     println!("#{id} -> {state}");
     Ok(())
 }
+
+fn cmd_dashboard() -> Result<()> {
+    let c = conn()?;
+    let rows = db::list(&c)?;
+    let dir = root().join("dashboard");
+    fs::create_dir_all(&dir)?;
+    // data.json
+    let json = serde_json::to_string_pretty(&rows_to_json(&rows))?;
+    fs::write(dir.join("data.json"), json)?;
+    // index.html
+    fs::write(dir.join("index.html"), DASHBOARD_HTML)?;
+    println!("dashboard -> {}", dir.join("index.html").display());
+    // try to open
+    let _ = std::process::Command::new("xdg-open")
+        .arg(dir.join("index.html"))
+        .spawn();
+    Ok(())
+}
+
+fn rows_to_json(rows: &[db::Target]) -> serde_json::Value {
+    let mut arr = Vec::new();
+    for t in rows {
+        arr.push(serde_json::json!({
+            "id": t.id,
+            "chain": t.chain,
+            "address": t.address,
+            "name": t.name,
+            "contract": t.contract,
+            "url": t.url,
+            "source": t.source,
+            "score": t.score,
+            "state": t.state,
+            "heat": t.heat,
+            "severity": t.severity,
+            "signals": t.signals,
+        }));
+    }
+    serde_json::Value::Array(arr)
+}
+
+const DASHBOARD_HTML: &str = r#"<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>scout dashboard</title>
+<style>
+body{font-family:system-ui,sans-serif;background:#0b0f14;color:#e6edf3;margin:0;padding:20px}
+h1{font-size:20px;margin:0 0 12px}
+.controls{display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap}
+input,select{background:#161b22;color:#e6edf3;border:1px solid #30363d;padding:6px 8px;border-radius:6px}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th,td{padding:6px 8px;border-bottom:1px solid #21262d;text-align:left;white-space:nowrap}
+th{background:#161b22;cursor:pointer;position:sticky;top:0}
+tr:hover{background:#161b22}
+.heat-hunt{color:#f85149;font-weight:600}
+.heat-maybe{color:#d29922}
+.heat-skip{color:#6e7681}
+.sev-critical,.sev-high{color:#f85149;font-weight:600}
+.sev-medium{color:#d29922}
+a{color:#58a6ff;text-decoration:none}
+</style></head><body>
+<h1>scout — hunts</h1>
+<div class="controls">
+<input id="q" placeholder="filter (name/address/chain/program)" style="flex:1;min-width:200px">
+<select id="kind"><option value="all">all</option><option value="bounty">bounty</option><option value="indie">indie</option></select>
+<select id="heat"><option value="all">heat: all</option><option value="hunt">hunt</option><option value="maybe">maybe</option><option value="skip">skip</option></select>
+<select id="state"><option value="all">state: all</option><option value="seen">seen</option><option value="scoped">scoped</option><option value="hypothesized">hypothesized</option><option value="proven">proven</option><option value="reported">reported</option><option value="killed">killed</option></select>
+</div>
+<table><thead><tr>
+<th data-k="id">id</th><th data-k="chain">chain</th><th data-k="score">score</th><th data-k="state">state</th>
+<th data-k="heat">heat</th><th data-k="severity">severity</th><th data-k="name">name</th>
+<th>address</th><th>url</th></tr></thead><tbody id="tb"></tbody></table>
+<script>
+let data=[];
+fetch('data.json').then(r=>r.json()).then(d=>{data=d;render()});
+function isBounty(t){const b=(t.source+' '+t.signals+' '+t.name).toLowerCase();return ['bounty','immunefi','cantina','code4rena','sherlock'].some(w=>b.includes(w));}
+function render(){
+  const q=document.getElementById('q').value.toLowerCase();
+  const kind=document.getElementById('kind').value;
+  const heat=document.getElementById('heat').value;
+  const state=document.getElementById('state').value;
+  let rows=data.filter(t=>{
+    if(q && !((t.name+t.address+t.chain+t.source).toLowerCase().includes(q))) return false;
+    if(kind!=='all'){const bounty=isBounty(t); if(kind==='bounty'&&!bounty) return false; if(kind==='indie'&&bounty) return false;}
+    if(heat!=='all' && t.heat!==heat) return false;
+    if(state!=='all' && t.state!==state) return false;
+    return true;
+  });
+  const tb=document.getElementById('tb');
+  tb.innerHTML=rows.map(t=>`<tr>
+    <td>${t.id}</td><td>${t.chain}</td><td>${t.score}</td><td>${t.state}</td>
+    <td class="heat-${t.heat}">${t.heat||'-'}</td><td class="sev-${t.severity}">${t.severity||'-'}</td>
+    <td>${t.contract||t.name}</td><td title="${t.address}">${t.address.slice(0,14)}…</td>
+    <td><a href="${t.url}" target="_blank">open</a></td></tr>`).join('');
+}
+document.querySelectorAll('input,select').forEach(e=>e.addEventListener('input',render));
+</script></body></html>
+"#;
 
 fn cmd_rm(id: i64, force: bool) -> Result<()> {
     let h = Hunt::open(id)?;
