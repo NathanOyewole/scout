@@ -251,6 +251,7 @@ fn cmd_pull(
             let id = ingest::chain_id(&chain).with_context_chain(&chain)?;
             ingest::sourcify_latest(id, limit)?
         }
+        "immunefi" => ingest::immunefi_latest(limit)?,
         "all" => {
             let mut out = if let Some(q) = query.clone() {
                 ingest::search(&q, limit)?

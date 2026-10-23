@@ -574,10 +574,78 @@ fn classify(
     (kind.into(), heat.into(), String::new(), notes)
 }
 
+pub fn immunefi_latest(limit: usize) -> Result<Vec<Found>> {
+    let raw: serde_json::Value = get_json("immunefi bounties", "https://immunefi.com/public-api/bounties.json")?;
+    let arr = raw.as_array().cloned().unwrap_or_default();
+    let mut out = Vec::new();
+    for b in arr.into_iter().take(limit * 4) {
+        let slug = b.get("slug").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        if slug.is_empty() {
+            continue;
+        }
+        let name = b
+            .get("project")
+            .and_then(|v| v.as_str())
+            .unwrap_or(&slug)
+            .to_string();
+        let ecosystems: Vec<String> = b
+            .get("ecosystem")
+            .and_then(|v| v.as_array())
+            .map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect())
+            .unwrap_or_default();
+        // pick first EVM chain scout understands
+        let mut chain = String::new();
+        for e in &ecosystems {
+            let low = e.to_ascii_lowercase();
+            let mapped = match low.as_str() {
+                "eth" | "ethereum" => "ethereum",
+                "base" => "base",
+                "arb" | "arbitrum" => "arbitrum",
+                "op" | "optimism" => "optimism",
+                "bsc" | "bnb" | "binance" => "bsc",
+                "polygon" | "matic" => "polygon",
+                "avax" | "avalanche" => "avalanche",
+                _ => "",
+            };
+            if !mapped.is_empty() {
+                chain = mapped.to_string();
+                break;
+            }
+        }
+        if chain.is_empty() {
+            continue;
+        }
+        let max_bounty = b.get("maxBounty").and_then(|v| v.as_i64()).unwrap_or(0);
+        let score = (max_bounty / 10000).max(1).min(100);
+        let url = format!("https://immunefi.com/bounty/{}", slug);
+        let mut signals = vec!["immunefi".into(), "bounty".into(), "immunefi-program".into()];
+        for e in &ecosystems {
+            signals.push(e.to_ascii_lowercase());
+        }
+        if max_bounty >= 100_000 {
+            signals.push("high-bounty".into());
+        }
+        out.push(Found {
+            chain,
+            // synthetic address: programs have no single CA. the user adds the
+            // specific contract with `--address` once they pick one from scope.
+            address: format!("program:{}", slug),
+            name,
+            pair: String::new(),
+            url,
+            source: "immunefi".into(),
+            signals,
+            score,
+        });
+        if out.len() >= limit {
+            break;
+        }
+    }
+    Ok(out)
+}
 pub fn chain_id(name: &str) -> Option<u64> {
     let n = name.trim().to_ascii_lowercase();
     let id = match n.as_str() {
-        "eth" | "ethereum" | "mainnet" => 1,
         "base" => 8453,
         "arb" | "arbitrum" | "arbitrum-one" => 42161,
         "op" | "optimism" => 10,
