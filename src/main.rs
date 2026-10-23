@@ -22,7 +22,9 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Cmd {
+    /// Create ~/.scout and show target count.
     Init,
+    /// Pull targets from a radar (sourcify, immunefi, dexscreener, all).
     Pull {
         #[arg(long)]
         query: Option<String>,
@@ -45,34 +47,43 @@ enum Cmd {
         #[arg(long, default_value = "")]
         program: String,
     },
+    /// List targets (filter by kind: bounty/indie/all).
     List {
         #[arg(long, default_value = "all")]
         kind: String,
         #[arg(long, default_value_t = 40)]
         limit: usize,
     },
+    /// Export cas.csv for submissions.
     Export,
+    /// Open a target's hunt folder.
     Open {
         id: i64,
     },
+    /// Fetch verified source + surface into hunt folder.
     Source {
         id: i64,
     },
+    /// Print test commands for a target.
     Test {
         id: i64,
     },
+    /// Run fork test; marks proven only if testHypothesis is filled.
     Prove {
         id: i64,
     },
+    /// Set a severity rating.
     Rate {
         id: i64,
         level: String,
         #[arg(long, default_value = "")]
         note: String,
     },
+    /// Print (and finalize) the report.
     Report {
         id: i64,
     },
+    /// Set state (seen/scoped/hypothesized/proven/...).
     State {
         id: i64,
         state: String,
@@ -84,6 +95,7 @@ enum Cmd {
         #[arg(long)]
         force: bool,
     },
+    /// Open the local triage dashboard.
     Dashboard,
 }
 
