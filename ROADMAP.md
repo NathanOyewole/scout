@@ -34,8 +34,8 @@ radar -> surface -> hypothesis -> prove -> report
   - http timeout + user-agent + 429/5xx retry with Retry-After
   - `SCOUT_RPC` fork override
   - 52 unit tests, clippy clean, `cargo fmt` clean
-- [ ] hypothesis rows in sqlite
-- [ ] v1 extra radars / Immunefi ingest
+- [x] hypothesis rows in sqlite
+- [x] v1 extra radars / Immunefi ingest
 
 ## fork only, never live
 
