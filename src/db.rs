@@ -13,7 +13,7 @@ pub const STATES: [&str; 8] = [
     "closed",
 ];
 
-const COLS: &str = "id, chain, address, name, deployer, pair, url, source, first_seen, score, state, signals, heat, severity, contract";
+const COLS: &str = "id, chain, address, name, deployer, pair, url, source, first_seen, score, state, signals, heat, severity, contract, hypothesis";
 
 #[derive(Debug, Clone)]
 pub struct Target {
@@ -32,6 +32,7 @@ pub struct Target {
     pub heat: String,
     pub severity: String,
     pub contract: String,
+    pub hypothesis: String,
 }
 
 pub fn open(path: &Path) -> Result<Connection> {
@@ -86,7 +87,15 @@ fn migrate(conn: &Connection) -> Result<()> {
         }
         v
     };
-    for col in ["pair", "url", "source", "heat", "severity", "contract"] {
+    for col in [
+        "pair",
+        "url",
+        "source",
+        "heat",
+        "severity",
+        "contract",
+        "hypothesis",
+    ] {
         if !have.iter().any(|h| h == col) {
             conn.execute_batch(&format!(
                 "ALTER TABLE targets ADD COLUMN {col} TEXT NOT NULL DEFAULT ''"
@@ -209,6 +218,24 @@ pub fn set_state(conn: &Connection, id: i64, state: &str) -> Result<()> {
     Ok(())
 }
 
+pub fn set_hypothesis(conn: &Connection, id: i64, text: &str) -> Result<()> {
+    conn.execute(
+        "UPDATE targets SET hypothesis = ?1 WHERE id = ?2",
+        params![text, id],
+    )
+    .context("set_hypothesis")?;
+    Ok(())
+}
+
+pub fn get_hypothesis(conn: &Connection, id: i64) -> Result<String> {
+    conn.query_row(
+        "SELECT hypothesis FROM targets WHERE id = ?1",
+        params![id],
+        |r| r.get(0),
+    )
+    .context("get_hypothesis")
+}
+
 /// Whitelisted so a column name can never be caller-controlled SQL.
 pub fn set_field(conn: &Connection, id: i64, column: &str, value: &str) -> Result<()> {
     if ![
@@ -291,6 +318,7 @@ fn map_row(r: &rusqlite::Row) -> rusqlite::Result<Target> {
         heat: r.get(12)?,
         severity: r.get(13)?,
         contract: r.get(14)?,
+        hypothesis: r.get(15)?,
     })
 }
 

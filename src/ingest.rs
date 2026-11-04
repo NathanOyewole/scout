@@ -575,11 +575,18 @@ fn classify(
 }
 
 pub fn immunefi_latest(limit: usize) -> Result<Vec<Found>> {
-    let raw: serde_json::Value = get_json("immunefi bounties", "https://immunefi.com/public-api/bounties.json")?;
+    let raw: serde_json::Value = get_json(
+        "immunefi bounties",
+        "https://immunefi.com/public-api/bounties.json",
+    )?;
     let arr = raw.as_array().cloned().unwrap_or_default();
     let mut out = Vec::new();
     for b in arr.into_iter().take(limit * 4) {
-        let slug = b.get("slug").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let slug = b
+            .get("slug")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
         if slug.is_empty() {
             continue;
         }
@@ -591,7 +598,11 @@ pub fn immunefi_latest(limit: usize) -> Result<Vec<Found>> {
         let ecosystems: Vec<String> = b
             .get("ecosystem")
             .and_then(|v| v.as_array())
-            .map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect())
+            .map(|a| {
+                a.iter()
+                    .filter_map(|x| x.as_str().map(String::from))
+                    .collect()
+            })
             .unwrap_or_default();
         // pick first EVM chain scout understands
         let mut chain = String::new();
@@ -618,7 +629,11 @@ pub fn immunefi_latest(limit: usize) -> Result<Vec<Found>> {
         let max_bounty = b.get("maxBounty").and_then(|v| v.as_i64()).unwrap_or(0);
         let score = (max_bounty / 10000).max(1).min(100);
         let url = format!("https://immunefi.com/bounty/{}", slug);
-        let mut signals = vec!["immunefi".into(), "bounty".into(), "immunefi-program".into()];
+        let mut signals = vec![
+            "immunefi".into(),
+            "bounty".into(),
+            "immunefi-program".into(),
+        ];
         for e in &ecosystems {
             signals.push(e.to_ascii_lowercase());
         }

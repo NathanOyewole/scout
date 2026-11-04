@@ -57,21 +57,13 @@ enum Cmd {
     /// Export cas.csv for submissions.
     Export,
     /// Open a target's hunt folder.
-    Open {
-        id: i64,
-    },
+    Open { id: i64 },
     /// Fetch verified source + surface into hunt folder.
-    Source {
-        id: i64,
-    },
+    Source { id: i64 },
     /// Print test commands for a target.
-    Test {
-        id: i64,
-    },
+    Test { id: i64 },
     /// Run fork test; marks proven only if testHypothesis is filled.
-    Prove {
-        id: i64,
-    },
+    Prove { id: i64 },
     /// Set a severity rating.
     Rate {
         id: i64,
@@ -79,15 +71,12 @@ enum Cmd {
         #[arg(long, default_value = "")]
         note: String,
     },
+    /// Store a hypothesis for a target.
+    Hypothesis { id: i64, text: String },
     /// Print (and finalize) the report.
-    Report {
-        id: i64,
-    },
+    Report { id: i64 },
     /// Set state (seen/scoped/hypothesized/proven/...).
-    State {
-        id: i64,
-        state: String,
-    },
+    State { id: i64, state: String },
     /// Drop a target and its hunt folder. Refuses while a severity is set,
     /// so a graded hypothesis cannot be deleted by accident.
     Rm {
@@ -183,6 +172,7 @@ fn run() -> Result<()> {
         Cmd::Test { id } => cmd_test(id),
         Cmd::Prove { id } => cmd_prove(id),
         Cmd::Rate { id, level, note } => cmd_rate(id, level, note),
+        Cmd::Hypothesis { id, text } => cmd_hypothesis(id, text),
         Cmd::Report { id } => cmd_report(id),
         Cmd::State { id, state } => cmd_state(id, state),
         Cmd::Rm { id, force } => cmd_rm(id, force),
@@ -261,6 +251,7 @@ fn cmd_pull(
         return Ok(());
     }
     let found = match source_kind.as_str() {
+        "dexscreener" => ingest::latest_profiles(limit)?,
         "sourcify" => {
             let id = ingest::chain_id(&chain).with_context_chain(&chain)?;
             ingest::sourcify_latest(id, limit)?
@@ -572,6 +563,16 @@ fn cmd_report(id: i64) -> Result<()> {
     db::set_state(&h.conn, id, "reported")?;
     eprintln!();
     eprintln!("state -> reported. send it privately. do not post while open.");
+    Ok(())
+}
+
+fn cmd_hypothesis(id: i64, text: String) -> Result<()> {
+    let h = Hunt::open(id)?;
+    h.ensure()?;
+    db::set_hypothesis(&h.conn, id, &text)?;
+    db::set_state(&h.conn, id, "hypothesized")?;
+    println!("#{} hypothesis stored -> state -> hypothesized", id);
+    println!("  {}", text);
     Ok(())
 }
 

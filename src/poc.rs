@@ -291,6 +291,7 @@ mod tests {
             heat: String::new(),
             severity: String::new(),
             contract: String::new(),
+            hypothesis: String::new(),
         }
     }
 
