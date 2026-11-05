@@ -86,6 +86,11 @@ enum Cmd {
     },
     /// Open the local triage dashboard.
     Dashboard,
+    /// Serve the dashboard + reports over HTTP (accessible from any device).
+    Serve {
+        #[arg(long, default_value_t = 8080)]
+        port: u16,
+    },
 }
 
 fn root() -> PathBuf {
@@ -177,6 +182,7 @@ fn run() -> Result<()> {
         Cmd::State { id, state } => cmd_state(id, state),
         Cmd::Rm { id, force } => cmd_rm(id, force),
         Cmd::Dashboard => cmd_dashboard(),
+        Cmd::Serve { port } => cmd_serve(port),
     }
 }
 
@@ -608,6 +614,47 @@ fn cmd_dashboard() -> Result<()> {
     let _ = std::process::Command::new("xdg-open")
         .arg(dir.join("index.html"))
         .spawn();
+    Ok(())
+}
+
+fn cmd_serve(port: u16) -> Result<()> {
+    // Regenerate dashboard files (without xdg-open)
+    let c = conn()?;
+    let rows = db::list(&c)?;
+    let dir = root().join("dashboard");
+    fs::create_dir_all(&dir)?;
+    let json = serde_json::to_string_pretty(&rows_to_json(&rows))?;
+    fs::write(dir.join("data.json"), json)?;
+    fs::write(dir.join("index.html"), DASHBOARD_HTML)?;
+    let server = tiny_http::Server::http(format!("0.0.0.0:{}", port))
+        .map_err(|e| anyhow::anyhow!("bind failed: {}", e))?;
+    println!("scout serve -> http://0.0.0.0:{}", port);
+    println!("local: http://localhost:{}", port);
+    println!("press Ctrl+C to stop");
+    for request in server.incoming_requests() {
+        let url = request.url().to_string();
+        let path = if url == "/" { "/index.html" } else { &url };
+        let file_path = dir.join(path.trim_start_matches('/'));
+        if file_path.exists() && file_path.is_file() {
+            let content = std::fs::read(&file_path).unwrap_or_default();
+            let mime = if path.ends_with(".html") {
+                "text/html"
+            } else if path.ends_with(".json") {
+                "application/json"
+            } else if path.ends_with(".css") {
+                "text/css"
+            } else if path.ends_with(".js") {
+                "application/javascript"
+            } else {
+                "application/octet-stream"
+            };
+            let response = tiny_http::Response::from_data(content)
+                .with_header(tiny_http::Header::from_bytes(&b"Content-Type"[..], mime.as_bytes()).unwrap());
+            let _ = request.respond(response);
+        } else {
+            let _ = request.respond(tiny_http::Response::from_string("404 Not Found").with_status_code(404));
+        }
+    }
     Ok(())
 }
 
