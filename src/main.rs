@@ -293,6 +293,13 @@ fn cmd_pull(
             &c, &f.chain, &f.address, &f.name, "", &f.pair, &f.url, &f.source, f.score, &sigs,
         )?;
         println!("#{id} {} {} {}", f.chain, f.name, f.address);
+        if f.max_bounty > 0 {
+            println!("   bounty: up to ${}", f.max_bounty);
+        }
+        println!("   url: {}", f.url);
+        if !f.signals.is_empty() {
+            println!("   signals: {}", f.signals.join(", "));
+        }
     }
     if non_evm > 0 {
         println!("skipped {non_evm} non-EVM find(s) — scout reads EVM source only");

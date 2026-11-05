@@ -15,6 +15,7 @@ pub struct Found {
     pub source: String,
     pub signals: Vec<String>,
     pub score: i64,
+    pub max_bounty: i64,
 }
 
 #[derive(Debug, Clone)]
@@ -128,6 +129,7 @@ pub fn latest_profiles(limit: usize) -> Result<Vec<Found>> {
             source: "dexscreener-profile".into(),
             signals,
             score,
+            max_bounty: 0,
         });
     }
     Ok(out)
@@ -166,6 +168,7 @@ pub fn search(query: &str, limit: usize) -> Result<Vec<Found>> {
             source: "dexscreener-search".into(),
             signals,
             score,
+            max_bounty: 0,
         });
     }
     Ok(out)
@@ -199,6 +202,7 @@ pub fn sourcify_latest(chain_id: u64, limit: usize) -> Result<Vec<Found>> {
             source: "sourcify".into(),
             signals,
             score,
+            max_bounty: 0,
         });
     }
     Ok(out)
@@ -651,6 +655,7 @@ pub fn immunefi_latest(limit: usize) -> Result<Vec<Found>> {
             source: "immunefi".into(),
             signals,
             score,
+            max_bounty,
         });
         if out.len() >= limit {
             break;
