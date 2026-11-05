@@ -51,3 +51,7 @@ cloudflared tunnel --url http://localhost:8080
 This tool does not test against live contracts. No broadcast, no private keys. Fork test only.
 
 State lives in `~/.scout`.
+
+## Hermes plugin
+
+If you use Hermes, the [Contract Hunter](https://github.com/NathanOyewole/hermes-contract-hunter) plugin wraps these commands as native tools, a `/hunt` slash command, and an optional session-start hook. Catalog PR: https://github.com/NousResearch/hermes-agent/pull/149478.
